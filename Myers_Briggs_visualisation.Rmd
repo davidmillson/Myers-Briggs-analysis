@@ -1,0 +1,256 @@
+---
+title: "Myers Briggs visualisation"
+author: "David Millson"
+date: "13 April 2016"
+output: html_document
+---
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+library(rgl) #for 3d plots
+library(rglwidget) #for putting 3d plots into html
+library(RColorBrewer) #for setting colour scales
+library(dplyr) #for data manipulation
+library(tidyr) #for data manipulation
+library(igraph) #for networks
+library(knitr) #for html
+
+#read the data
+data = read.csv("W:/Science Evidence and Analytics/Analytics/Operational Research/OR Non Project/Technical/Training/Programming/Myers Briggs.csv")
+
+#name the indivduals based on their MBTI type, and store the names to the rows of data
+names = paste( ifelse(data$E > 0, "E", "I"), ifelse(data$S > 0, "S", "N"), ifelse(data$T > 0, "T", "F"), ifelse(data$J > 0, "J", "P"), sep = "")
+instance = sapply(1:NROW(names), function(x) sum(names[1:x]==names[x]))
+names = paste(names, instance,sep = "")
+row.names(data) = names
+
+#define a blue-orange colour scale
+colour_scale = c(
+      sort( brewer.pal( 9, "Blues" ), decreasing = FALSE ),
+      brewer.pal( 9, "Oranges" )
+    )
+```
+
+#Myers Briggs analysis
+We've taken those results from the MBTI training and tried some visualisation approaches on them. On the one hand, I think this demonstrates that it isn't necessarily correct to group people by types, as the people generally on the borderline are closer to people of other types who are close to the borderline than they are to more "extreme" people of their own type.
+
+However, there's a couple of caveats that need noting. All of the analysis below takes the numbers given at the training at face value. However, we're assuming that a high extravert score means "very extraverted", but it could equally mean "extraverted with a high degree of confidence". Also, there must be some uncertainty in the numbers, and we haven't taken account of that in any way. 
+
+##Robin, Hiten and Nicoletta's work on principal component analysis:
+This approach looks at whether the unit's results can be explained with less variable than the four used in Myers Briggs. To begin with, they looked at the strength of the relationship between the four variables.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+pairs(data) # creates a pairwise plot of each two-way combination of attributes
+```
+
+Set of plots showing the relationships between each pair of variables.
+
+The strength of these relationships is shown in the correlation table below.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+kable(cor(data)) # estimates the covariance matrix to show the strength of realtionship between each combination of attributes
+```
+
+Next they performed principal component analysis to plot the points in two dimensions.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+loadings(princomp(data)) # estimates the loadings (weighted sums) for each principal component and the % of the overall variation associated with them.
+biplot(princomp(data)) # plots each individual on the first two principal components.
+```
+
+Plot of the unit members. The text codes represent a member, described by their Myers Briggs type. Where there is more than one member per type, they are also given a number to identify them.
+
+##Abdul and David's work on networks
+This approach ignores the absolute values of people's types and instead looks at the relative "distance" between each pair of people (the root of the sum of the squares of the difference in each variable). Then, by defining a cutoff distance below which people are connected and above which they are disconnected, a network map can be drawn. The width of the line in the plot below shows the closeness of the connection.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#make the margins for plots less generous
+par(mai=c(0,0,1,0))
+
+#define a function to find the squared distance between two people, by summing the squared distance along each axis 
+distance_squared = function(name1, name2){
+  (data[name1,"E"]-data[name2,"E"])^2 +
+    (data[name1,"S"]-data[name2,"S"])^2 +
+    (data[name1,"T"]-data[name2,"T"])^2 +
+    (data[name1,"J"]-data[name2,"J"])^2
+}
+#define a function to find the distance, by taking the root of the squared distance
+distance = function(name1, name2){
+  sqrt(distance_squared(name1, name2))
+}
+
+#run distance for each combination of names and turn into a dataframe
+distance_wide = as.data.frame(sapply(names, distance, name2 = names)) %>% mutate(name1 = names)
+
+#gather the the distances into long form
+distance_long = distance_wide %>% gather(name2,distance,-name1)
+
+#define a maximum distance for vertices to be connected
+max_distance = 50.4
+
+#filter out any the trivial pairs where a name is connected to itself
+connections = distance_long %>% filter( (row_number()-1) %% 15 > (row_number()-1) %/% 15 )
+
+#create the network, filtering out any vertices further than 50.4 apart
+network=graph.data.frame(connections %>% filter( distance < 50.4 ), directed=F)
+
+#colour the nodes gray and make them bigger
+V(network)$size = 20
+V(network)$color = "Grey"
+
+#set the width and colour of the edges
+E(network)$width = 10^(2+log2(10/E(network)$distance))
+E(network)$color = brewer.pal(9,"Greens")[as.numeric(cut(E(network)$width,seq(from=-14.4,to=7.2,len=9)))]
+
+#plot the graph
+plot(network, vertex.label.cex=0.7)
+```
+
+It's interesting to compare this map with the principal component analysis plot - the same clusters can be identified in each. It should of course be noted that a "connection" between two people indicates only a type similarity. It doesn't mean that "unconnected" people shouldn't be able to work together.
+
+##David's work on 3d plots
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#define a function wrapper for rgl's plot3d function, and the associated functions required to add the ouput to the html file.
+plot_MBTI = function(x, y, z, colour) {
+  #get the name of the column input into x, y and z and find the appropriate axis label
+  xlab = get_label(deparse(substitute(x)))
+  ylab = get_label(deparse(substitute(y)))
+  zlab = get_label(deparse(substitute(z)))
+  #create the plot
+  plot3d(
+    #define the axes
+    x, y, z,
+    #map the colour variable to the colour scale
+    col = colour_scale[ as.numeric(
+      cut(
+        colour,
+        seq( from=-60, to=60, by=120/18 )
+      ) ) ],
+    #set the points to be spheres
+    type = "s",
+    #set the size of the spheres
+    size = 4,
+    #set the limits of the axes
+    xlim = c(-60,60), ylim = c(-60,60), zlim = c(-60,60),
+    #set the axis labels
+    xlab = xlab, ylab = ylab, zlab = zlab
+  )
+  
+  #save the scene
+  rglscene=scene3d()
+  #close the applet
+  rgl.close()
+  #load the scene into a widget in the html file
+  rglwidget(rglscene)
+}
+
+#given a column in the dataframe, return a label for the axis
+get_label = function( variable_name ) {
+  switch( variable_name,
+                 "data$E" = "I(-)/E(+)",
+                 "data$S" = "N(-)/S(+)",
+                 "data$T" = "F(-)/T(+)",
+                 "data$J" = "P(-)/J(+)" )
+}
+```
+
+Although we can't plot in four dimensions, we can plot in three dimensions and represent the fourth with something else, like colour. The following are three dimensional equivalents of the pair plots at the top, with the spare variable marked with a colour scale. The plots can be rotated by left-clicking and dragging. You can also zoom by using the mouse wheel.
+
+The first plots S, T and J, with E mapped to colour. Dark orange means highly extravert, light colours are close to the middle, and dark blue means highly introvert.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI( data$S, data$T, data$J, colour = data$E )
+```
+
+The second plots E, T and J, with S mapped to colour. Dark orange means highly sensing, light colours are close to the middle, and dark blue means highly intuitive
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI( data$T, data$J, data$E, colour = data$S )
+```
+
+The third plots E, S and J, with T mapped to colour. Dark orange means highly thinking, and light colours are close to the middle (there isn't any dark blue, because no one in the group is highly feeling).
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI( data$J, data$E, data$S, colour = data$T )
+```
+
+The fourth plots E, S, and T, with J mapped to colour. Dark orange means highly judging, light colours are close to the middle, and dark blue means highly perceiving.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI( data$E, data$S, data$T, colour = data$J )
+```
+
+###Combining networks and 3d plots
+Finally, we can do the same sort of thing, but with connector lines to illustrate near neighbours. Once again, wide lines show close connections and thin lines are far connections. The plots can be rotated and zoomed as before (sadly, I haven't figured out how to add axes).
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#create the network
+network=graph.data.frame(connections, directed=F)
+
+#make the nodes bigger
+V(network)$size = 20
+
+#set the width of the edges as a function of the distance
+E(network)$width = 10^(2+log2(10/E(network)$distance))
+#colour the edges according to the width
+E(network)$color = brewer.pal(9,"Greens")[as.numeric(cut(E(network)$width,seq(from=0,to=7.2,len=9)))]
+
+#create a dataframe with the names of the nodes in the same order as in the network
+layout_data = data.frame( name = V(network)$name )
+#merge the dataframe with the original data to get the MBTI values 
+layout_data = layout_data %>% left_join( data %>% mutate(name = rownames( data ) ) )
+```
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#define a function wrapper for igraph's rglplot function, and the associated functions required to add the ouput to the html file.
+plot_MBTI_network = function( network, layout_data, colour ) {
+  #remove the name and colour columns from the layout dataframe and turn into a matrix
+  layout_matrix = layout_data %>%
+    select_( "-name", paste("-", colour, sep = "" ) ) %>%
+    as.matrix()
+  
+  #map the colour variable to the colour scale and assign to the vertices
+  V(network)$color = colour_scale[ as.numeric(
+    cut(
+      layout_data[,colour],
+      seq( from=-60, to=60, len=18 )
+    ) ) ]
+
+  #plot the network with font size reduced to fit in the nodes
+  rglplot( network, layout = layout_matrix )
+
+  #save the scene
+  rglscene=scene3d()
+  #close the applet
+  rgl.close()
+  #load the scene into a widget in the html file
+  rglwidget(rglscene)
+}
+```
+
+The first plot shows the extravert-introvert axis in colour (orange - blue respectively), with the other three in space.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI_network(network, layout_data, "E")
+```
+
+The second plot shows the sensing-intuitive axis in colour (orange - blue respectively), with the other three in space.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI_network(network, layout_data, "S")
+```
+
+The third plot shows the thinking-feeling axis in colour (orange - blue respectively), with the other three in space.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI_network(network, layout_data, "T")
+```
+
+The fourth plot shows the judging-perceiving axis in colour (orange - blue respectively), with the other three in space.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+plot_MBTI_network(network, layout_data, "J")
+```
+
+
+
